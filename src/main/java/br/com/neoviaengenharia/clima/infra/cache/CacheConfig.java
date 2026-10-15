@@ -1,6 +1,7 @@
 package br.com.neoviaengenharia.clima.infra.cache;
 
 import br.com.neoviaengenharia.clima.domain.previsao.PrevisaoVigente;
+import br.com.neoviaengenharia.clima.domain.previsao.RodadaPrevisao;
 import br.com.neoviaengenharia.clima.domain.regiao.CatalogoSnapshot;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -13,6 +14,8 @@ import org.springframework.context.annotation.Configuration;
 
 @Configuration(proxyBeanMethods = false)
 public class CacheConfig {
+
+    private static final Duration VALIDADE_L1_RODADA = Duration.ofMinutes(15);
 
     /** L1 do catálogo: uma entrada, que expira em {@code validoAte} do próprio snapshot. */
     @Bean
@@ -64,6 +67,19 @@ public class CacheConfig {
                         return duracao;
                     }
                 })
+                .build();
+    }
+
+    /**
+     * L1 da rodada específica (S3): a entrada não tem validade no dado, e o S2 só invalida o L1 da instância que
+     * sobrescreveu (E1). Validade de 15 min limita a defasagem dos demais pods ao mesmo limite da rodada vigente.
+     */
+    @Bean
+    Cache<String, RodadaPrevisao> previsaoRodadaL1(Clock clock) {
+        return Caffeine.newBuilder()
+                .maximumSize(500)
+                .expireAfterWrite(VALIDADE_L1_RODADA)
+                .ticker(() -> clock.millis() * 1_000_000L)
                 .build();
     }
 

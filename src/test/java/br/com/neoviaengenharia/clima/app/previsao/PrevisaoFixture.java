@@ -48,7 +48,8 @@ class PrevisaoFixture {
         this.regioes = ctx.getBean(RegiaoRepository.class);
         this.buscas = ctx.getBean(BuscaCatalogoRepository.class);
         this.tx = new TransactionTemplate(ctx.getBean(PlatformTransactionManager.class));
-        this.l1s = List.of(ctx.getBean("catalogoL1", Cache.class), ctx.getBean("previsaoVigenteL1", Cache.class));
+        this.l1s = List.of(ctx.getBean("catalogoL1", Cache.class), ctx.getBean("previsaoVigenteL1", Cache.class),
+                ctx.getBean("previsaoRodadaL1", Cache.class));
         this.redis = ctx.getBean(StringRedisTemplate.class);
     }
 
