@@ -293,7 +293,9 @@ Códigos confirmados na aprovação. Nas consultas de previsão com várias regi
 | Refresh forçado dentro de 24 h | 200 com o catálogo guardado, sem chamar a Nimbus |
 | Região que some do catálogo | Mantida e marcada como removida (sai da listagem; consultas dão 404) |
 | Catálogo vazio vindo da Nimbus | Tratado como falha (não grava; fallback com `desatualizado=true`) |
-| Testes de integração | Testcontainers (SQL Server e Redis) |
+| Testes de integração | H2 em modo MSSQLServer (EULA do SQL Server não aceita) + Redis via Testcontainers |
+| Catálogo após falha da Nimbus | Nova tentativa só depois de 15 min |
+| Redis | Variáveis `SPRING_DATA_REDIS_*` do Secret `secret` |
 | Rodada de uma região | Maior `run_datetime` entre os pontos retornados |
 | Janela enviada à Nimbus | Hoje 00:00 UTC até +15 dias |
 | Endpoint de previsão | `GET /api/clima/previsoes?regioes=...&inicio=&fim=`, no máximo 20 regiões |

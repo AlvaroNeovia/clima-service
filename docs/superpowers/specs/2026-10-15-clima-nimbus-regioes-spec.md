@@ -79,6 +79,8 @@ A validação usa o catálogo pelas regras S1-FR-03 e nunca chama a Nimbus só p
 
 **S1-FR-14.** Se a Nimbus devolver o catálogo vazio (`[]`), o clima-service deve tratá-lo como resposta inválida: não grava nada, não marca regiões como removidas, aplica S1-FR-09/S1-FR-10 e registra log WARN.
 
+**S1-FR-15 (limite após falha).** Depois de uma busca do catálogo que falhou, o clima-service não deve tentar a Nimbus de novo por 15 minutos, considerando todas as instâncias. Nesse intervalo, aplica S1-FR-09/S1-FR-10 sem chamar a Nimbus. *(Decisão de 2026-10-15, na fase de plano.)*
+
 **S1-FR-13 (FR-050).** O clima-service deve documentar os dois endpoints em OpenAPI (springdoc).
 
 ## 5. Interfaces
@@ -118,7 +120,7 @@ Sem corpo. A resposta 200 tem o mesmo formato de 5.1. Endpoint interno (rede do 
 ### 5.5 Configuração e deploy
 - `NIMBUS_API_KEY` e `NIMBUS_AUTHORIZATION` vêm de chaves no Secret do Kubernetes (`secretKeyRef`), como em `pgo-api-service/k8s/04-deployment.yaml:60-78`.
 - O datasource segue `SPRING_DATASOURCE_*` do Secret `secret`. Flyway com schema `clima`, tabela `flyway_schema_history_clima`, e `ddl-auto=validate`.
-- Redis: `REDIS_HOST`/`REDIS_PORT` (mesma instância do `neoviapainel-backend`), com todas as chaves prefixadas `clima:`.
+- Redis: mesma instância usada no cluster, via `SPRING_DATA_REDIS_HOST`/`SPRING_DATA_REDIS_PORT`/`SPRING_DATA_REDIS_DATABASE` do Secret `secret` (padrão de `terraform-k8s/k8s/deployments/gestao.yaml:103-115`), com todas as chaves prefixadas `clima:`.
 - Service do Kubernetes só interno (ClusterIP), sem ingress e sem rota no gateway.
 
 ## 6. Modelo de dados (schema `clima`)
@@ -144,6 +146,15 @@ Uma linha por busca bem-sucedida na Nimbus. Serve de histórico do catálogo e d
 | `id` | BIGINT IDENTITY | PK |
 | `obtido_em` | DATETIME2 (UTC) | Instante da busca |
 | `total_regioes` | INT | Quantidade recebida |
+
+### Tabela `catalogo_regioes_controle`
+
+Uma única linha (`id = 1`). Serve de trava entre instâncias (S1-FR-02, S1-AC-13), via lock pessimista, e registra a última falha (S1-FR-15).
+
+| Coluna | Tipo | Regra |
+| --- | --- | --- |
+| `id` | INT | PK, sempre 1 |
+| `ultima_falha_em` | DATETIME2 (UTC) | Nulo depois de uma busca bem-sucedida |
 
 ### Chaves de cache
 - L1 (Caffeine, por instância) e L2 (Redis): chave `clima:regioes:catalogo`, com o catálogo e o `obtidoEm`.
@@ -262,6 +273,6 @@ Then só uma chamada é feita à Nimbus.
 - **Cliente da Nimbus:** com servidor HTTP simulado (mesmo padrão de `OpenMeteoClient` + `MockRestServiceServer`, ver `pgo-api-service/src/main/java/br/com/neoviaengenharia/pgo/infra/clima/OpenMeteoClient.java:19-20`):
   - headers e query;
   - 200, 401, 403, 5xx, timeout e corpo inválido.
-- **Integração:** SQL Server e Redis reais via Testcontainers (como no `hotel-service/pom.xml`); cobrir S1-AC-02, 03, 06, 08, 09, 11 e 13.
+- **Integração:** H2 em modo `MSSQLServer` no lugar do SQL Server (a EULA da imagem do SQL Server não foi aceita) e Redis real via Testcontainers; cobrir S1-AC-02, 03, 06, 08, 09, 11 e 13.
 - **API:** testes de controller para os formatos das seções 5.1 e 5.2 e a tabela de erros.
 - **Logs:** um teste confirma que os valores de credencial não aparecem nos logs (S1-AC-10).
