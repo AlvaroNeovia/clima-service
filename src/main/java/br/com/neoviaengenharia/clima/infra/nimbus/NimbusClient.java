@@ -42,13 +42,19 @@ public class NimbusClient {
             }
             throw new NimbusIndisponivelException(Motivo.ERRO_HTTP, status);
         } catch (ResourceAccessException e) {
-            throw new NimbusIndisponivelException(temTimeout(e) ? Motivo.TIMEOUT : Motivo.REDE, null);
+            throw semStatus(temTimeout(e) ? Motivo.TIMEOUT : Motivo.REDE, inicio);
         } catch (RestClientException e) {
             // timeout de leitura do corpo chega aqui embrulhado; o resto é corpo ilegível
-            throw new NimbusIndisponivelException(temTimeout(e) ? Motivo.TIMEOUT : Motivo.CORPO_INVALIDO, null);
+            throw semStatus(temTimeout(e) ? Motivo.TIMEOUT : Motivo.CORPO_INVALIDO, inicio);
         }
         registrar(resposta.getStatusCode().value(), inicio);
         return converter(resposta.getBody());
+    }
+
+    /** Falha sem resposta HTTP: registra motivo e duração (nunca a mensagem nem a causa). */
+    private static NimbusIndisponivelException semStatus(Motivo motivo, long inicio) {
+        log.warn("nimbus GET {} status=n/a motivo={} duracaoMs={}", CAMINHO, motivo, (System.nanoTime() - inicio) / 1_000_000);
+        return new NimbusIndisponivelException(motivo, null);
     }
 
     private static void registrar(int status, long inicio) {

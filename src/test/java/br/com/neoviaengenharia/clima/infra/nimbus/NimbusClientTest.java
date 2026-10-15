@@ -5,6 +5,7 @@ import br.com.neoviaengenharia.clima.infra.nimbus.NimbusIndisponivelException.Mo
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
+import okhttp3.mockwebserver.SocketPolicy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -128,6 +129,30 @@ class NimbusClientTest {
         assertThatThrownBy(() -> cliente(Duration.ofMillis(200)).listarRegioes())
                 .isInstanceOfSatisfying(NimbusIndisponivelException.class,
                         e -> assertThat(e.motivo()).isEqualTo(Motivo.TIMEOUT));
+    }
+
+    @Test
+    void timeoutEsperandoHeaders() {
+        server.enqueue(new MockResponse().setBody(JSON_DOC).setSocketPolicy(SocketPolicy.NO_RESPONSE));
+        assertThatThrownBy(() -> cliente(Duration.ofMillis(200)).listarRegioes())
+                .isInstanceOfSatisfying(NimbusIndisponivelException.class,
+                        e -> assertThat(e.motivo()).isEqualTo(Motivo.TIMEOUT));
+    }
+
+    @Test
+    void timeoutEhRegistradoSemCredencial(CapturedOutput saida) {
+        server.enqueue(new MockResponse().setBody(JSON_DOC).setSocketPolicy(SocketPolicy.NO_RESPONSE));
+        assertThatThrownBy(() -> cliente(Duration.ofMillis(200)).listarRegioes())
+                .isInstanceOf(NimbusIndisponivelException.class);
+        assertThat(saida.getAll()).contains("forecast-regions").contains("TIMEOUT").contains("duracaoMs")
+                .doesNotContain(PUBLICA).doesNotContain(PRIVADA);
+    }
+
+    @Test
+    void mensagemTemStatusEntreColchetes() {
+        responder(503, "{}");
+        assertThatThrownBy(() -> cliente().listarRegioes())
+                .hasMessage("Nimbus indisponível: ERRO_HTTP [503]");
     }
 
     @Test

@@ -9,7 +9,7 @@ public class NimbusIndisponivelException extends RuntimeException {
     private final Integer status;
 
     public NimbusIndisponivelException(Motivo motivo, Integer status) {
-        super("Nimbus indisponível: " + motivo + (status == null ? "" : " " + status), null, false, false);
+        super("Nimbus indisponível: " + motivo + (status == null ? "" : " [" + status + "]"));
         this.motivo = motivo;
         this.status = status;
     }
