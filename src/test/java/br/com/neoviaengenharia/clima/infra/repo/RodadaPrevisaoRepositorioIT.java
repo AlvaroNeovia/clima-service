@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import br.com.neoviaengenharia.clima.domain.previsao.PontoPrevisao;
 import br.com.neoviaengenharia.clima.domain.previsao.RodadaPrevisao;
+import br.com.neoviaengenharia.clima.domain.previsao.RodadaResumo;
 import br.com.neoviaengenharia.clima.domain.regiao.Regiao;
 import br.com.neoviaengenharia.clima.domain.regiao.RegiaoNimbus;
 import br.com.neoviaengenharia.clima.support.IntegracaoBase;
@@ -134,5 +135,25 @@ class RodadaPrevisaoRepositorioIT extends IntegracaoBase {
         assertThat(repositorio.buscar(1359, Instant.parse(R14))).isPresent();
         assertThat(repositorio.buscar(1359, Instant.parse("2026-10-14T01:00:00Z"))).isEmpty();
         assertThat(repositorio.buscar(1706, Instant.parse(R14))).isEmpty();
+    }
+
+    @Test
+    void listarNoPeriodoDecrescente() {
+        for (int dia = 10; dia <= 15; dia++) {
+            String run = String.format("2026-10-%02dT00:00:00Z", dia);
+            repositorio.gravar(rodada(run, run, ponto(run.replace("00:00:00Z", "12:00:00Z"), run)));
+        }
+
+        List<RodadaResumo> rodadas = repositorio.listar(1359, Instant.parse("2026-10-12T00:00:00Z"),
+                Instant.parse("2026-10-14T00:00:00Z"));
+
+        assertThat(rodadas).extracting(RodadaResumo::rodada).containsExactly(
+                Instant.parse("2026-10-14T00:00:00Z"), Instant.parse("2026-10-13T00:00:00Z"),
+                Instant.parse("2026-10-12T00:00:00Z"));
+        assertThat(rodadas.get(0).obtidoEm()).isEqualTo(Instant.parse("2026-10-14T00:00:00Z"));
+        assertThat(repositorio.listar(1706, Instant.parse("2026-10-01T00:00:00Z"), Instant.parse("2026-10-31T00:00:00Z")))
+                .isEmpty();
+        assertThat(repositorio.listar(1359, Instant.parse("2026-11-01T00:00:00Z"), Instant.parse("2026-11-30T00:00:00Z")))
+                .isEmpty();
     }
 }

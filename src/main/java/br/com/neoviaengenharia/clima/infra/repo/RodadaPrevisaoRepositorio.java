@@ -2,6 +2,7 @@ package br.com.neoviaengenharia.clima.infra.repo;
 
 import br.com.neoviaengenharia.clima.domain.previsao.PontoPrevisao;
 import br.com.neoviaengenharia.clima.domain.previsao.RodadaPrevisao;
+import br.com.neoviaengenharia.clima.domain.previsao.RodadaResumo;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -49,6 +50,15 @@ public class RodadaPrevisaoRepositorio {
         return cabecalho("SELECT id, run_datetime, obtido_em FROM clima.rodada_previsao "
                 + "WHERE region_id = ? AND run_datetime = ?", regionId, utc(rodada))
                 .map(c -> c.comPontos(regionId, pontos(c.id())));
+    }
+
+    /** Rodadas da região no período, da mais recente para a mais antiga, sem ler os pontos. */
+    @Transactional(readOnly = true)
+    public List<RodadaResumo> listar(long regionId, Instant de, Instant ate) {
+        return jdbc.query("SELECT run_datetime, obtido_em FROM clima.rodada_previsao "
+                        + "WHERE region_id = ? AND run_datetime >= ? AND run_datetime <= ? ORDER BY run_datetime DESC",
+                (rs, n) -> new RodadaResumo(instante(rs, "run_datetime"), instante(rs, "obtido_em")),
+                regionId, utc(de), utc(ate));
     }
 
     /** Grava a rodada como nova ou, se já existir, sobrescreve {@code obtido_em} e todos os pontos. */
