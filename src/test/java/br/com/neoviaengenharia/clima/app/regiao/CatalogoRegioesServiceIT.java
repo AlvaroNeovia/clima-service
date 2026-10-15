@@ -205,7 +205,8 @@ class CatalogoRegioesServiceIT extends IntegracaoBase {
         assertThat(ids(r)).containsExactly(1359L, 1706L);
         assertThat(fx.regioes.findAllByRemovidaFalseOrderByRegionId()).hasSize(2);
         assertThat(fx.buscas.count()).isEqualTo(1);
-        assertThat(saida.getAll()).contains("WARN").contains("CORPO_INVALIDO");
+        assertThat(saida.getAll()).contains("WARN").contains("CORPO_INVALIDO")
+                .contains("Servindo catálogo de regiões desatualizado (obtidoEm=" + obtidoEm + ")");
     }
 
     @Test
@@ -261,5 +262,52 @@ class CatalogoRegioesServiceIT extends IntegracaoBase {
 
         assertThat(novasRequisicoes()).isEqualTo(1);
         assertThat(fx.buscas.count()).isEqualTo(2);
+    }
+
+    @Test
+    void esperaPelaTravaEsgotadaServeDesatualizado(CapturedOutput saida) throws Exception {
+        Instant obtidoEm = AGORA.minus(Duration.ofHours(25));
+        fx.gravar(obtidoEm, ativa(1359));
+
+        CatalogoResultado r;
+        try (CatalogoFixture.Trava timeout = fx.lockTimeoutDoH2(200);
+                CatalogoFixture.Trava outraInstancia = fx.travarControle()) {
+            r = service.obter();
+        }
+
+        assertThat(r.desatualizado()).isTrue();
+        assertThat(r.snapshot().obtidoEm()).isEqualTo(obtidoEm);
+        assertThat(novasRequisicoes()).isZero();
+        assertThat(saida.getAll()).contains("Não foi possível obter a trava do catálogo ou concluir a busca");
+        assertThat(saida.getAll()).contains("Servindo catálogo de regiões desatualizado (obtidoEm=" + obtidoEm + ")");
+    }
+
+    @Test
+    void esperaPelaTravaEsgotadaSemCatalogoLancaFonteIndisponivel() throws Exception {
+        try (CatalogoFixture.Trava timeout = fx.lockTimeoutDoH2(200);
+                CatalogoFixture.Trava outraInstancia = fx.travarControle()) {
+            assertThatThrownBy(() -> service.obter()).isInstanceOf(FonteIndisponivelException.class);
+        }
+        assertThat(novasRequisicoes()).isZero();
+    }
+
+    @Test
+    void intervaloAposFalhaNaoEsperaPelaTrava(CapturedOutput saida) throws Exception {
+        Instant obtidoEm = AGORA.minus(Duration.ofHours(25));
+        fx.gravar(obtidoEm, ativa(1359));
+        fx.registrarFalha(AGORA.minus(Duration.ofMinutes(5)));
+
+        CatalogoResultado r;
+        long inicio = System.nanoTime();
+        try (CatalogoFixture.Trava timeout = fx.lockTimeoutDoH2(10_000);
+                CatalogoFixture.Trava outraInstancia = fx.travarControle()) {
+            r = service.obter(); // com a trava presa, só volta antes do close() se não tentar travar
+        }
+        long duracaoMs = (System.nanoTime() - inicio) / 1_000_000;
+
+        assertThat(r.desatualizado()).isTrue();
+        assertThat(duracaoMs).isLessThan(5_000);
+        assertThat(novasRequisicoes()).isZero();
+        assertThat(saida.getAll()).contains("Servindo catálogo de regiões desatualizado (obtidoEm=" + obtidoEm + ")");
     }
 }

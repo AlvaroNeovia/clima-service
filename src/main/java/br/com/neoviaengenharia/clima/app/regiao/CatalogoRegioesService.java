@@ -19,7 +19,9 @@ import java.util.List;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -33,6 +35,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class CatalogoRegioesService {
 
     static final Duration INTERVALO_APOS_FALHA = Duration.ofMinutes(15);
+    private static final int ID_CONTROLE = 1;
     private static final Logger log = LoggerFactory.getLogger(CatalogoRegioesService.class);
 
     private final CatalogoCache cache;
@@ -77,12 +80,30 @@ public class CatalogoRegioesService {
             cache.guardar(gravado.get());
             return new CatalogoResultado(gravado.get(), false);
         }
-        Optional<CatalogoSnapshot> atual = tx.execute(s -> buscarComTrava());
+        if (dentroDoIntervaloAposFalha(controle.findById(ID_CONTROLE).orElseThrow(), agora)) {
+            return fallback(); // leitura sem trava: durante a pane ninguém espera pela linha de controle
+        }
+        Optional<CatalogoSnapshot> atual;
+        try {
+            atual = tx.execute(s -> buscarComTrava());
+        } catch (DataAccessException | TransactionException e) {
+            // Tipicamente a espera pela trava esgotada (outra instância presa numa Nimbus lenta). Pega
+            // DataAccessException inteira porque, quando o pool descarta a conexão após o timeout, o rollback
+            // falha e a exceção do lock chega trocada por JpaSystemException. Se o banco estiver fora de fato,
+            // o fallback() abaixo falha de novo e a exceção propaga.
+            log.warn("Não foi possível obter a trava do catálogo ou concluir a busca ({})",
+                    e.getClass().getSimpleName());
+            return fallback();
+        }
         if (atual.isPresent()) {
             cache.guardar(atual.get());
             return new CatalogoResultado(atual.get(), false);
         }
         return fallback();
+    }
+
+    private static boolean dentroDoIntervaloAposFalha(ControleCatalogo c, Instant agora) {
+        return c.getUltimaFalhaEm() != null && agora.isBefore(c.getUltimaFalhaEm().plus(INTERVALO_APOS_FALHA));
     }
 
     /**
@@ -98,7 +119,7 @@ public class CatalogoRegioesService {
         if (gravado.isPresent() && gravado.get().vigente(agora)) {
             return gravado; // outra requisição/instância acabou de buscar
         }
-        if (c.getUltimaFalhaEm() != null && agora.isBefore(c.getUltimaFalhaEm().plus(INTERVALO_APOS_FALHA))) {
+        if (dentroDoIntervaloAposFalha(c, agora)) {
             return Optional.empty();
         }
 
@@ -120,9 +141,9 @@ public class CatalogoRegioesService {
     }
 
     private CatalogoResultado fallback() {
-        return snapshotDoSql()
-                .map(s -> new CatalogoResultado(s, true))
-                .orElseThrow(FonteIndisponivelException::new);
+        CatalogoSnapshot gravado = snapshotDoSql().orElseThrow(FonteIndisponivelException::new);
+        log.warn("Servindo catálogo de regiões desatualizado (obtidoEm={})", gravado.obtidoEm());
+        return new CatalogoResultado(gravado, true);
     }
 
     /** Regiões não removidas + {@code obtidoEm} da última busca; vazio se nunca houve busca bem-sucedida. */

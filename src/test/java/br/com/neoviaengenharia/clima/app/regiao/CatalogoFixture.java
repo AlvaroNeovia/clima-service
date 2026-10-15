@@ -8,7 +8,10 @@ import br.com.neoviaengenharia.clima.infra.repo.BuscaCatalogoRepository;
 import br.com.neoviaengenharia.clima.infra.repo.ControleCatalogoRepository;
 import br.com.neoviaengenharia.clima.infra.repo.RegiaoRepository;
 import com.github.benmanes.caffeine.cache.Cache;
+import com.zaxxer.hikari.HikariDataSource;
 import java.time.Instant;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import okhttp3.mockwebserver.MockResponse;
@@ -16,11 +19,15 @@ import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.QueueDispatcher;
 import org.springframework.context.ApplicationContext;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /** Preparação do estado (SQL, cache e Nimbus simulado) para os testes do catálogo. */
 class CatalogoFixture {
+
+    /** Valor padrão de {@code DEFAULT_LOCK_TIMEOUT} no H2 2.x (ms); o H2 não o expõe em INFORMATION_SCHEMA. */
+    private static final int LOCK_TIMEOUT_PADRAO_DO_H2 = 1000;
 
     final RegiaoRepository regioes;
     final BuscaCatalogoRepository buscas;
@@ -28,6 +35,7 @@ class CatalogoFixture {
     private final TransactionTemplate tx;
     private final Cache<String, CatalogoSnapshot> l1;
     private final StringRedisTemplate redis;
+    private final HikariDataSource dataSource;
 
     @SuppressWarnings("unchecked")
     CatalogoFixture(ApplicationContext ctx) {
@@ -37,10 +45,65 @@ class CatalogoFixture {
         this.tx = new TransactionTemplate(ctx.getBean(PlatformTransactionManager.class));
         this.l1 = ctx.getBean("catalogoL1", Cache.class);
         this.redis = ctx.getBean(StringRedisTemplate.class);
+        this.dataSource = ctx.getBean(HikariDataSource.class);
     }
 
     Instant ultimaFalhaEm() {
         return tx.execute(s -> controle.travar().getUltimaFalhaEm());
+    }
+
+    /** Grava {@code ultimaFalhaEm} como se uma busca tivesse falhado em {@code quando}. */
+    void registrarFalha(Instant quando) {
+        tx.executeWithoutResult(s -> controle.travar().registrarFalha(quando));
+    }
+
+    /**
+     * Trava a linha de controle numa transação de outra thread até {@link Trava#close()}, simulando outra
+     * instância presa numa busca lenta na Nimbus.
+     */
+    Trava travarControle() throws InterruptedException {
+        CountDownLatch obtida = new CountDownLatch(1);
+        CountDownLatch soltar = new CountDownLatch(1);
+        Thread dono = new Thread(() -> tx.executeWithoutResult(s -> {
+            controle.travar();
+            obtida.countDown();
+            try {
+                soltar.await(30, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }), "dono-da-trava");
+        dono.start();
+        if (!obtida.await(10, TimeUnit.SECONDS)) {
+            throw new IllegalStateException("A thread dona não obteve a trava");
+        }
+        return () -> {
+            soltar.countDown();
+            try {
+                dono.join(10_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+    }
+
+    interface Trava extends AutoCloseable {
+        @Override
+        void close();
+    }
+
+    /**
+     * Baixa o lock timeout do H2 (o Hibernate ignora a dica de timeout no H2) para as conexões novas do pool,
+     * até {@link Trava#close()}, que restaura o padrão do H2 (a URL de teste não o altera).
+     */
+    Trava lockTimeoutDoH2(int millis) {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        jdbc.execute("SET DEFAULT_LOCK_TIMEOUT " + millis);
+        dataSource.getHikariPoolMXBean().softEvictConnections();
+        return () -> {
+            jdbc.execute("SET DEFAULT_LOCK_TIMEOUT " + LOCK_TIMEOUT_PADRAO_DO_H2);
+            dataSource.getHikariPoolMXBean().softEvictConnections();
+        };
     }
 
     /** Esvazia tabelas, zera a última falha, limpa L1/L2 e descarta respostas enfileiradas no Nimbus. */
