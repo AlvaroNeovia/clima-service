@@ -23,9 +23,20 @@ import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.SocketPolicy;
+import java.util.ArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 
+@ExtendWith(OutputCaptureExtension.class)
 class PrevisaoVigenteServiceIT extends IntegracaoBase {
 
     static final Instant AGORA = Instant.parse("2026-10-15T18:00:00Z");
@@ -244,5 +255,137 @@ class PrevisaoVigenteServiceIT extends IntegracaoBase {
 
         assertThat(novasRequisicoes()).isZero();
         assertThat(item.rodada().pontos()).hasSize(6);
+    }
+
+    // ---- falhas da Nimbus (S2-FR-13/14/15, D1) ----
+
+    @Test
+    void nimbusForaComRodada() {
+        fx.gravarRodada(1359, R14, "2026-10-14T03:00:00Z", ponto("2026-10-14T15:00:00Z", R14));
+        fx.registrarTentativa(1359, AGORA.minus(Duration.ofMinutes(20)), false);
+        nimbus.enqueue(new MockResponse().setResponseCode(503));
+
+        ItemPrevisao item = unico(List.of(1359L));
+
+        assertThat(novasRequisicoes()).isEqualTo(1);
+        assertThat(item.desatualizado()).isTrue();
+        assertThat(item.erro()).isNull();
+        assertThat(item.rodada().obtidoEm()).isEqualTo(Instant.parse("2026-10-14T03:00:00Z"));
+        assertThat(fx.tentativa(1359).getUltimaTentativaEm()).isEqualTo(AGORA);
+        assertThat(fx.tentativa(1359).isUltimaFalhou()).isTrue();
+
+        relogio.avancar(Duration.ofMinutes(5));
+        ItemPrevisao denovo = unico(List.of(1359L));
+        assertThat(novasRequisicoes()).isEqualTo(1);
+        assertThat(denovo.desatualizado()).isTrue();
+    }
+
+    @Test
+    void nimbusForaUmaDeDuas() {
+        fx.gravarRodada(1359, R14, R14, ponto("2026-10-14T15:00:00Z", R14));
+        nimbus.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE));
+
+        ConsultaPrevisao c = service.consultar(List.of(1359L, 1706L), null, null);
+
+        assertThat(novasRequisicoes()).isEqualTo(1);
+        assertThat(c.itens().get(0).desatualizado()).isTrue();
+        assertThat(c.itens().get(0).rodada().rodada()).isEqualTo(Instant.parse(R14));
+        assertThat(c.itens().get(1).erro()).isEqualTo(CodigoErroRegiao.FONTE_INDISPONIVEL);
+        assertThat(c.todasIndisponiveis()).isFalse();
+    }
+
+    @Test
+    void nimbusForaTodas() {
+        nimbus.enqueue(new MockResponse().setResponseCode(503));
+
+        ConsultaPrevisao c = service.consultar(List.of(1359L, 1706L), null, null);
+
+        assertThat(c.itens()).allSatisfy(i -> assertThat(i.erro()).isEqualTo(CodigoErroRegiao.FONTE_INDISPONIVEL));
+        assertThat(c.todasIndisponiveis()).isTrue();
+
+        relogio.avancar(Duration.ofMinutes(5)); // dentro da janela: repete a falha sem chamar (D1)
+        assertThat(service.consultar(List.of(1359L), null, null).todasIndisponiveis()).isTrue();
+        assertThat(novasRequisicoes()).isEqualTo(1);
+    }
+
+    @Test
+    void regiaoOmitidaEhFalhaSoDela() {
+        nimbus.enqueue(resposta(regiao(1359, R15, "", "2026-10-15T15:00:00Z")));
+
+        ConsultaPrevisao c = service.consultar(List.of(1359L, 1706L), null, null);
+
+        assertThat(c.itens().get(0).rodada()).isNotNull();
+        assertThat(c.itens().get(1).erro()).isEqualTo(CodigoErroRegiao.FONTE_INDISPONIVEL);
+        assertThat(fx.tentativa(1706).isUltimaFalhou()).isTrue();
+        assertThat(fx.tentativa(1359).isUltimaFalhou()).isFalse();
+    }
+
+    @Test
+    void credencialRecusadaLogaErro(CapturedOutput saida) {
+        fx.gravarRodada(1359, R14, R14, ponto("2026-10-14T15:00:00Z", R14));
+        nimbus.enqueue(new MockResponse().setResponseCode(401));
+
+        ItemPrevisao item = unico(List.of(1359L));
+
+        assertThat(item.desatualizado()).isTrue();
+        assertThat(saida.getAll()).contains("ERROR").contains("recusou as credenciais");
+        assertThat(saida.getAll()).doesNotContain("chave-publica-teste").doesNotContain("chave-privada-teste");
+    }
+
+    // ---- concorrência (S2-FR-17) ----
+
+    private List<ConsultaPrevisao> emParalelo(List<List<Long>> pedidos) throws Exception {
+        CountDownLatch largada = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(pedidos.size());
+        try {
+            List<Future<ConsultaPrevisao>> futuros = new ArrayList<>();
+            for (List<Long> ids : pedidos) {
+                futuros.add(pool.submit(() -> {
+                    largada.await();
+                    return service.consultar(ids, null, null);
+                }));
+            }
+            largada.countDown();
+            List<ConsultaPrevisao> resultados = new ArrayList<>();
+            for (Future<ConsultaPrevisao> f : futuros) {
+                resultados.add(f.get(30, TimeUnit.SECONDS));
+            }
+            return resultados;
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void concorrenciaUmaChamada() throws Exception {
+        nimbus.enqueue(resposta(regiao(1359, R15, "", "2026-10-15T15:00:00Z")).setHeadersDelay(300, TimeUnit.MILLISECONDS));
+        for (int i = 0; i < 7; i++) {
+            nimbus.enqueue(resposta(regiao(1359, R15, "", "2026-10-15T15:00:00Z")));
+        }
+
+        List<ConsultaPrevisao> resultados = emParalelo(java.util.Collections.nCopies(8, List.of(1359L)));
+
+        assertThat(novasRequisicoes()).isEqualTo(1);
+        assertThat(resultados).allSatisfy(c -> assertThat(c.itens().get(0).rodada().pontos()).hasSize(1));
+    }
+
+    @Test
+    void ordemInversaSemDeadlock() throws Exception {
+        String corpo = regiao(1359, R15, "", "2026-10-15T15:00:00Z") + "," + regiao(1706, R15, "", "2026-10-15T15:00:00Z");
+        nimbus.enqueue(resposta(corpo).setHeadersDelay(300, TimeUnit.MILLISECONDS));
+        for (int i = 0; i < 7; i++) {
+            nimbus.enqueue(resposta(corpo));
+        }
+        List<List<Long>> pedidos = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            pedidos.add(List.of(1359L, 1706L));
+            pedidos.add(List.of(1706L, 1359L));
+        }
+
+        List<ConsultaPrevisao> resultados = emParalelo(pedidos);
+
+        assertThat(novasRequisicoes()).isEqualTo(1);
+        assertThat(regioesDoCorpo(ultimoCorpo())).containsExactlyInAnyOrder(1359L, 1706L);
+        assertThat(resultados).allSatisfy(c -> assertThat(c.itens()).allSatisfy(i -> assertThat(i.rodada()).isNotNull()));
     }
 }
