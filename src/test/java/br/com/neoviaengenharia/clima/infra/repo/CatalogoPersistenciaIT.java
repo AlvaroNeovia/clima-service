@@ -48,4 +48,13 @@ class CatalogoPersistenciaIT {
         assertThat(c.getUltimaFalhaEm()).isNull();
         assertThat(controle.count()).isEqualTo(1);
     }
+
+    @Test
+    void ultimaFalhaEmLeSoOValor() {
+        assertThat(controle.ultimaFalhaEm()).isEmpty();
+
+        controle.travar().registrarFalha(Instant.parse("2026-10-15T12:00:00Z"));
+
+        assertThat(controle.ultimaFalhaEm()).contains(Instant.parse("2026-10-15T12:00:00Z"));
+    }
 }

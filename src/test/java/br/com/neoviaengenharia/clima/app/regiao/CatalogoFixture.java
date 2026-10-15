@@ -5,6 +5,7 @@ import br.com.neoviaengenharia.clima.domain.regiao.Regiao;
 import br.com.neoviaengenharia.clima.domain.regiao.RegiaoNimbus;
 import br.com.neoviaengenharia.clima.infra.repo.BuscaCatalogo;
 import br.com.neoviaengenharia.clima.infra.repo.BuscaCatalogoRepository;
+import br.com.neoviaengenharia.clima.infra.repo.ControleCatalogo;
 import br.com.neoviaengenharia.clima.infra.repo.ControleCatalogoRepository;
 import br.com.neoviaengenharia.clima.infra.repo.RegiaoRepository;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -12,6 +13,8 @@ import com.zaxxer.hikari.HikariDataSource;
 import java.time.Instant;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import okhttp3.mockwebserver.MockResponse;
@@ -62,16 +65,22 @@ class CatalogoFixture {
      * instância presa numa busca lenta na Nimbus.
      */
     Trava travarControle() throws InterruptedException {
+        return travarControle(c -> {});
+    }
+
+    /** Como {@link #travarControle()}, mas aplica {@code antesDeSoltar} à linha, na mesma transação, antes do commit. */
+    Trava travarControle(Consumer<ControleCatalogo> antesDeSoltar) throws InterruptedException {
         CountDownLatch obtida = new CountDownLatch(1);
         CountDownLatch soltar = new CountDownLatch(1);
         Thread dono = new Thread(() -> tx.executeWithoutResult(s -> {
-            controle.travar();
+            ControleCatalogo c = controle.travar();
             obtida.countDown();
             try {
                 soltar.await(30, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
+            antesDeSoltar.accept(c);
         }), "dono-da-trava");
         dono.start();
         if (!obtida.await(10, TimeUnit.SECONDS)) {
@@ -85,6 +94,26 @@ class CatalogoFixture {
                 Thread.currentThread().interrupt();
             }
         };
+    }
+
+    /** Espera até alguma sessão do H2 estar bloqueada esperando uma trava. */
+    void aguardarSessaoBloqueada() throws InterruptedException {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        long limite = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (System.nanoTime() < limite) {
+            Integer bloqueadas = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SESSIONS WHERE BLOCKER_ID IS NOT NULL", Integer.class);
+            if (bloqueadas != null && bloqueadas > 0) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        throw new IllegalStateException("Nenhuma sessão ficou esperando a trava");
+    }
+
+    /** Roda {@code acao} numa transação externa: um único contexto de persistência, como no open-in-view. */
+    <T> T emUmContextoDePersistencia(Supplier<T> acao) {
+        return tx.execute(s -> acao.get());
     }
 
     interface Trava extends AutoCloseable {
