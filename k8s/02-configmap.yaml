@@ -1,0 +1,11 @@
+# Configuracao nao sensivel. Credenciais ficam nos Secrets (ver 04-deployment.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clima-service-config
+  namespace: default
+  labels:
+    app: clima-service
+data:
+  # Habilita /actuator/health/liveness e /actuator/health/readiness
+  MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
