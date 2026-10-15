@@ -1,0 +1,18 @@
+# ClusterIP: consumido apenas dentro do cluster (pgo-api-service e neoviapainel-backend).
+# Sem Ingress e sem rota de gateway.
+apiVersion: v1
+kind: Service
+metadata:
+  name: clima-service
+  namespace: default
+  labels:
+    app: clima-service
+spec:
+  type: ClusterIP
+  selector:
+    app: clima-service
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

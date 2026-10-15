@@ -2,6 +2,7 @@ package br.com.neoviaengenharia.clima.infra.nimbus;
 
 import br.com.neoviaengenharia.clima.domain.regiao.RegiaoNimbus;
 import br.com.neoviaengenharia.clima.infra.nimbus.NimbusIndisponivelException.Motivo;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
@@ -47,7 +48,7 @@ class NimbusClientTest {
     private NimbusClient cliente(Duration readTimeout) {
         NimbusProperties props = new NimbusProperties(server.url("/").uri(), PUBLICA, PRIVADA,
                 Duration.ofSeconds(2), readTimeout);
-        return new NimbusClient(NimbusConfig.criarRestClient(props));
+        return new NimbusClient(NimbusConfig.criarRestClient(props), new ObjectMapper());
     }
 
     private NimbusClient cliente() {
