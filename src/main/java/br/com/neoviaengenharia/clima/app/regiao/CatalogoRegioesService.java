@@ -17,9 +17,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -77,7 +80,25 @@ public class CatalogoRegioesService {
             cache.guardar(gravado.get());
             return new CatalogoResultado(gravado.get(), false);
         }
-        Optional<CatalogoSnapshot> atual = tx.execute(s -> buscarComTrava());
+        // leitura sem trava e sem anexar a entidade: durante a pane ninguém espera pela linha de controle
+        if (dentroDoIntervaloAposFalha(controle.ultimaFalhaEm().orElse(null), agora)) {
+            return fallback();
+        }
+        AtomicBoolean nimbusRespondeu = new AtomicBoolean(false);
+        Optional<CatalogoSnapshot> atual;
+        try {
+            atual = tx.execute(s -> buscarComTrava(nimbusRespondeu));
+        } catch (DataAccessException | TransactionException e) {
+            // Pega DataAccessException inteira porque, quando o pool descarta a conexão após o timeout da trava,
+            // o rollback falha e a exceção do lock chega trocada por JpaSystemException. Se o banco estiver fora
+            // de fato, o fallback() abaixo falha de novo e a exceção propaga.
+            if (nimbusRespondeu.get()) {
+                log.error("Falha ao gravar o catálogo após busca bem-sucedida ({})", e.getClass().getSimpleName());
+            } else {
+                log.warn("Não foi possível obter a trava do catálogo ({})", e.getClass().getSimpleName());
+            }
+            return fallback();
+        }
         if (atual.isPresent()) {
             cache.guardar(atual.get());
             return new CatalogoResultado(atual.get(), false);
@@ -85,12 +106,16 @@ public class CatalogoRegioesService {
         return fallback();
     }
 
+    private static boolean dentroDoIntervaloAposFalha(Instant ultimaFalhaEm, Instant agora) {
+        return ultimaFalhaEm != null && agora.isBefore(ultimaFalhaEm.plus(INTERVALO_APOS_FALHA));
+    }
+
     /**
      * Roda com a linha de controle travada. Devolve o catálogo vigente (de outra instância ou recém-buscado)
      * ou vazio quando a Nimbus falhou ou está no intervalo após falha; nesse caso a transação ainda faz commit,
      * para que {@code ultimaFalhaEm} fique gravado.
      */
-    private Optional<CatalogoSnapshot> buscarComTrava() {
+    private Optional<CatalogoSnapshot> buscarComTrava(AtomicBoolean nimbusRespondeu) {
         ControleCatalogo c = controle.travar();
         Instant agora = clock.instant();
 
@@ -98,7 +123,7 @@ public class CatalogoRegioesService {
         if (gravado.isPresent() && gravado.get().vigente(agora)) {
             return gravado; // outra requisição/instância acabou de buscar
         }
-        if (c.getUltimaFalhaEm() != null && agora.isBefore(c.getUltimaFalhaEm().plus(INTERVALO_APOS_FALHA))) {
+        if (dentroDoIntervaloAposFalha(c.getUltimaFalhaEm(), agora)) {
             return Optional.empty();
         }
 
@@ -111,6 +136,7 @@ public class CatalogoRegioesService {
             c.registrarFalha(agora);
             return Optional.empty();
         }
+        nimbusRespondeu.set(true);
 
         List<Regiao> gravadas = regioes.findAll();
         regioes.saveAll(ReconciliacaoCatalogo.aplicar(gravadas, recebidas, agora));
@@ -120,9 +146,9 @@ public class CatalogoRegioesService {
     }
 
     private CatalogoResultado fallback() {
-        return snapshotDoSql()
-                .map(s -> new CatalogoResultado(s, true))
-                .orElseThrow(FonteIndisponivelException::new);
+        CatalogoSnapshot gravado = snapshotDoSql().orElseThrow(FonteIndisponivelException::new);
+        log.warn("Servindo catálogo de regiões desatualizado (obtidoEm={})", gravado.obtidoEm());
+        return new CatalogoResultado(gravado, true);
     }
 
     /** Regiões não removidas + {@code obtidoEm} da última busca; vazio se nunca houve busca bem-sucedida. */

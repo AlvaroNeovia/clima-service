@@ -7,6 +7,7 @@ import static br.com.neoviaengenharia.clima.app.regiao.CatalogoFixture.resposta;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import br.com.neoviaengenharia.clima.domain.regiao.RegiaoNimbus;
 import br.com.neoviaengenharia.clima.domain.regiao.RegiaoResumo;
 import br.com.neoviaengenharia.clima.support.IntegracaoBase;
 import br.com.neoviaengenharia.clima.support.RelogioMutavel;
@@ -205,7 +206,8 @@ class CatalogoRegioesServiceIT extends IntegracaoBase {
         assertThat(ids(r)).containsExactly(1359L, 1706L);
         assertThat(fx.regioes.findAllByRemovidaFalseOrderByRegionId()).hasSize(2);
         assertThat(fx.buscas.count()).isEqualTo(1);
-        assertThat(saida.getAll()).contains("WARN").contains("CORPO_INVALIDO");
+        assertThat(saida.getAll()).contains("WARN").contains("CORPO_INVALIDO")
+                .contains("Servindo catálogo de regiões desatualizado (obtidoEm=" + obtidoEm + ")");
     }
 
     @Test
@@ -261,5 +263,90 @@ class CatalogoRegioesServiceIT extends IntegracaoBase {
 
         assertThat(novasRequisicoes()).isEqualTo(1);
         assertThat(fx.buscas.count()).isEqualTo(2);
+    }
+
+    @Test
+    void esperaPelaTravaEsgotadaServeDesatualizado(CapturedOutput saida) throws Exception {
+        Instant obtidoEm = AGORA.minus(Duration.ofHours(25));
+        fx.gravar(obtidoEm, ativa(1359));
+
+        CatalogoResultado r;
+        try (CatalogoFixture.Trava timeout = fx.lockTimeoutDoH2(200);
+                CatalogoFixture.Trava outraInstancia = fx.travarControle()) {
+            r = service.obter();
+        }
+
+        assertThat(r.desatualizado()).isTrue();
+        assertThat(r.snapshot().obtidoEm()).isEqualTo(obtidoEm);
+        assertThat(novasRequisicoes()).isZero();
+        assertThat(saida.getAll()).contains("Não foi possível obter a trava do catálogo (");
+        assertThat(saida.getAll()).contains("Servindo catálogo de regiões desatualizado (obtidoEm=" + obtidoEm + ")");
+    }
+
+    @Test
+    void esperaPelaTravaEsgotadaSemCatalogoLancaFonteIndisponivel() throws Exception {
+        try (CatalogoFixture.Trava timeout = fx.lockTimeoutDoH2(200);
+                CatalogoFixture.Trava outraInstancia = fx.travarControle()) {
+            assertThatThrownBy(() -> service.obter()).isInstanceOf(FonteIndisponivelException.class);
+        }
+        assertThat(novasRequisicoes()).isZero();
+    }
+
+    @Test
+    void intervaloAposFalhaNaoEsperaPelaTrava(CapturedOutput saida) throws Exception {
+        Instant obtidoEm = AGORA.minus(Duration.ofHours(25));
+        fx.gravar(obtidoEm, ativa(1359));
+        fx.registrarFalha(AGORA.minus(Duration.ofMinutes(5)));
+
+        CatalogoResultado r;
+        long inicio = System.nanoTime();
+        try (CatalogoFixture.Trava timeout = fx.lockTimeoutDoH2(10_000);
+                CatalogoFixture.Trava outraInstancia = fx.travarControle()) {
+            r = service.obter(); // com a trava presa, só volta antes do close() se não tentar travar
+        }
+        long duracaoMs = (System.nanoTime() - inicio) / 1_000_000;
+
+        assertThat(r.desatualizado()).isTrue();
+        assertThat(duracaoMs).isLessThan(5_000);
+        assertThat(novasRequisicoes()).isZero();
+        assertThat(saida.getAll()).contains("Servindo catálogo de regiões desatualizado (obtidoEm=" + obtidoEm + ")");
+    }
+
+    @Test
+    void falhaGravadaDuranteAEsperaEhVistaMesmoComContextoDePersistenciaCompartilhado() throws Exception {
+        fx.gravar(AGORA.minus(Duration.ofHours(25)), ativa(1359));
+        nimbus.enqueue(resposta(ativa(1359))); // só uma implementação errada chegaria a usar
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try (CatalogoFixture.Trava timeout = fx.lockTimeoutDoH2(10_000);
+                CatalogoFixture.Trava outraInstancia =
+                        fx.travarControle(c -> c.registrarFalha(AGORA.minus(Duration.ofMinutes(1))))) {
+            // pré-leitura e trecho travado no mesmo EntityManager (como numa requisição web com open-in-view)
+            Future<CatalogoResultado> futuro = pool.submit(() -> fx.emUmContextoDePersistencia(service::obter));
+            fx.aguardarSessaoBloqueada();
+            outraInstancia.close(); // a outra instância registra a falha e solta a trava
+
+            CatalogoResultado r = futuro.get(15, TimeUnit.SECONDS);
+
+            assertThat(r.desatualizado()).isTrue();
+            assertThat(novasRequisicoes()).isZero();
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void falhaAoGravarAposBuscaBemSucedidaLogaErro(CapturedOutput saida) {
+        Instant obtidoEm = AGORA.minus(Duration.ofHours(25));
+        fx.gravar(obtidoEm, ativa(1359));
+        // nome maior que NVARCHAR(200): a Nimbus responde bem, mas a gravação falha
+        nimbus.enqueue(resposta(new RegiaoNimbus(1359L, "x".repeat(250), "r1359", false, 25L)));
+
+        CatalogoResultado r = service.obter();
+
+        assertThat(novasRequisicoes()).isEqualTo(1);
+        assertThat(r.desatualizado()).isTrue();
+        assertThat(r.snapshot().obtidoEm()).isEqualTo(obtidoEm);
+        assertThat(fx.buscas.count()).isEqualTo(1);
+        assertThat(saida.getAll()).contains("ERROR").contains("Falha ao gravar o catálogo após busca bem-sucedida (");
     }
 }
