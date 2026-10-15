@@ -1,6 +1,7 @@
 package br.com.neoviaengenharia.clima.ui.rest;
 
 import br.com.neoviaengenharia.clima.ui.exceptions.ParametrosInvalidosException;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
@@ -13,6 +14,7 @@ import java.util.Set;
 final class ParametrosConsulta {
 
     static final int MAXIMO_REGIOES = 20;
+    static final Duration PERIODO_MAXIMO = Duration.ofDays(90);
 
     private ParametrosConsulta() {}
 
@@ -60,6 +62,32 @@ final class ParametrosConsulta {
     static void ordem(Instant inicio, Instant fim) {
         if (inicio != null && fim != null && fim.isBefore(inicio)) {
             throw new ParametrosInvalidosException("fim deve ser maior ou igual a inicio");
+        }
+    }
+
+    /** {@code regionId} do caminho: inteiro positivo. */
+    static long regiaoId(long valor) {
+        if (valor <= 0) {
+            throw new ParametrosInvalidosException("regionId deve ser positivo");
+        }
+        return valor;
+    }
+
+    /** Parâmetro obrigatório que é um instante ISO-8601 com fuso. */
+    static Instant obrigatorio(String valor, String nome) {
+        if (valor == null || valor.isBlank()) {
+            throw new ParametrosInvalidosException(nome + " é obrigatório");
+        }
+        return instante(valor, nome);
+    }
+
+    /** {@code ate} não pode vir antes de {@code de}, nem a mais de {@value #PERIODO_MAXIMO} dias depois. */
+    static void periodo(Instant de, Instant ate) {
+        if (ate.isBefore(de)) {
+            throw new ParametrosInvalidosException("ate deve ser maior ou igual a de");
+        }
+        if (Duration.between(de, ate).compareTo(PERIODO_MAXIMO) > 0) {
+            throw new ParametrosInvalidosException("o período máximo é de 90 dias");
         }
     }
 }
