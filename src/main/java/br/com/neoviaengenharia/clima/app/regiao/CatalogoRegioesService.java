@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -35,7 +36,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class CatalogoRegioesService {
 
     static final Duration INTERVALO_APOS_FALHA = Duration.ofMinutes(15);
-    private static final int ID_CONTROLE = 1;
     private static final Logger log = LoggerFactory.getLogger(CatalogoRegioesService.class);
 
     private final CatalogoCache cache;
@@ -80,19 +80,23 @@ public class CatalogoRegioesService {
             cache.guardar(gravado.get());
             return new CatalogoResultado(gravado.get(), false);
         }
-        if (dentroDoIntervaloAposFalha(controle.findById(ID_CONTROLE).orElseThrow(), agora)) {
-            return fallback(); // leitura sem trava: durante a pane ninguém espera pela linha de controle
+        // leitura sem trava e sem anexar a entidade: durante a pane ninguém espera pela linha de controle
+        if (dentroDoIntervaloAposFalha(controle.ultimaFalhaEm().orElse(null), agora)) {
+            return fallback();
         }
+        AtomicBoolean nimbusRespondeu = new AtomicBoolean(false);
         Optional<CatalogoSnapshot> atual;
         try {
-            atual = tx.execute(s -> buscarComTrava());
+            atual = tx.execute(s -> buscarComTrava(nimbusRespondeu));
         } catch (DataAccessException | TransactionException e) {
-            // Tipicamente a espera pela trava esgotada (outra instância presa numa Nimbus lenta). Pega
-            // DataAccessException inteira porque, quando o pool descarta a conexão após o timeout, o rollback
-            // falha e a exceção do lock chega trocada por JpaSystemException. Se o banco estiver fora de fato,
-            // o fallback() abaixo falha de novo e a exceção propaga.
-            log.warn("Não foi possível obter a trava do catálogo ou concluir a busca ({})",
-                    e.getClass().getSimpleName());
+            // Pega DataAccessException inteira porque, quando o pool descarta a conexão após o timeout da trava,
+            // o rollback falha e a exceção do lock chega trocada por JpaSystemException. Se o banco estiver fora
+            // de fato, o fallback() abaixo falha de novo e a exceção propaga.
+            if (nimbusRespondeu.get()) {
+                log.error("Falha ao gravar o catálogo após busca bem-sucedida ({})", e.getClass().getSimpleName());
+            } else {
+                log.warn("Não foi possível obter a trava do catálogo ({})", e.getClass().getSimpleName());
+            }
             return fallback();
         }
         if (atual.isPresent()) {
@@ -102,8 +106,8 @@ public class CatalogoRegioesService {
         return fallback();
     }
 
-    private static boolean dentroDoIntervaloAposFalha(ControleCatalogo c, Instant agora) {
-        return c.getUltimaFalhaEm() != null && agora.isBefore(c.getUltimaFalhaEm().plus(INTERVALO_APOS_FALHA));
+    private static boolean dentroDoIntervaloAposFalha(Instant ultimaFalhaEm, Instant agora) {
+        return ultimaFalhaEm != null && agora.isBefore(ultimaFalhaEm.plus(INTERVALO_APOS_FALHA));
     }
 
     /**
@@ -111,7 +115,7 @@ public class CatalogoRegioesService {
      * ou vazio quando a Nimbus falhou ou está no intervalo após falha; nesse caso a transação ainda faz commit,
      * para que {@code ultimaFalhaEm} fique gravado.
      */
-    private Optional<CatalogoSnapshot> buscarComTrava() {
+    private Optional<CatalogoSnapshot> buscarComTrava(AtomicBoolean nimbusRespondeu) {
         ControleCatalogo c = controle.travar();
         Instant agora = clock.instant();
 
@@ -119,7 +123,7 @@ public class CatalogoRegioesService {
         if (gravado.isPresent() && gravado.get().vigente(agora)) {
             return gravado; // outra requisição/instância acabou de buscar
         }
-        if (dentroDoIntervaloAposFalha(c, agora)) {
+        if (dentroDoIntervaloAposFalha(c.getUltimaFalhaEm(), agora)) {
             return Optional.empty();
         }
 
@@ -132,6 +136,7 @@ public class CatalogoRegioesService {
             c.registrarFalha(agora);
             return Optional.empty();
         }
+        nimbusRespondeu.set(true);
 
         List<Regiao> gravadas = regioes.findAll();
         regioes.saveAll(ReconciliacaoCatalogo.aplicar(gravadas, recebidas, agora));
