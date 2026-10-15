@@ -1,6 +1,8 @@
 package br.com.neoviaengenharia.clima.ui.rest;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -104,9 +106,27 @@ class RegioesControllerTest {
                 .andExpect(content().json(
                         "{\"status\":\"INTERNAL_SERVER_ERROR\",\"message\":\"Erro inesperado no clima-service.\"}",
                         true));
-        org.assertj.core.api.Assertions.assertThat(saida.getOut() + saida.getErr())
+        assertThat(saida.getOut() + saida.getErr())
                 .contains("ERROR")
                 .contains("segredo-interno-xyz");
+    }
+
+    @Test
+    void metodoNaoSuportado405SemErroNoLog(CapturedOutput saida) throws Exception {
+        mvc.perform(delete("/api/clima/regioes"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(content().json(
+                        "{\"status\":\"METHOD_NOT_ALLOWED\",\"message\":\"Método não suportado\"}", true));
+        assertThat(saida.getOut() + saida.getErr()).doesNotContain(" ERROR ");
+    }
+
+    @Test
+    void rotaInexistente404SemErroNoLog(CapturedOutput saida) throws Exception {
+        mvc.perform(get("/api/clima/nao-existe"))
+                .andExpect(status().isNotFound())
+                .andExpect(content().json(
+                        "{\"status\":\"NOT_FOUND\",\"message\":\"Recurso não encontrado\"}", true));
+        assertThat(saida.getOut() + saida.getErr()).doesNotContain(" ERROR ");
     }
 
     @RestController
