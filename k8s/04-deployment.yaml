@@ -1,0 +1,137 @@
+# Workload do clima-service. imagePullSecret "regcred" e PriorityClass "high-priority" ja existem no cluster.
+# O Secret "secret" (datasource e Redis) ja existe no cluster.
+# O Secret "clima-service-nimbus" NAO e criado por este repositorio: deve existir
+# (criado fora do repositorio) com as chaves NIMBUS_API_KEY e NIMBUS_AUTHORIZATION.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clima-service
+  namespace: default
+  labels:
+    app: clima-service
+    app.kubernetes.io/name: clima-service
+spec:
+  replicas: 2
+  revisionHistoryLimit: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: clima-service
+  template:
+    metadata:
+      labels:
+        app: clima-service
+        app.kubernetes.io/name: clima-service
+    spec:
+      serviceAccountName: clima-service
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: regcred
+      priorityClassName: high-priority
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: clima-service
+          image: neoviaportaldevregistry.azurecr.io/clima-service:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: clima-service-config
+          env:
+            - name: SPRING_DATASOURCE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: secret
+                  key: SPRING_DATASOURCE_URL
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: secret
+                  key: SPRING_DATASOURCE_USERNAME
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: secret
+                  key: SPRING_DATASOURCE_PASSWORD
+            - name: SPRING_DATA_REDIS_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: secret
+                  key: SPRING_DATA_REDIS_HOST
+            - name: SPRING_DATA_REDIS_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: secret
+                  key: SPRING_DATA_REDIS_PORT
+            - name: SPRING_DATA_REDIS_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: secret
+                  key: SPRING_DATA_REDIS_DATABASE
+            - name: NIMBUS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: clima-service-nimbus
+                  key: NIMBUS_API_KEY
+            - name: NIMBUS_AUTHORIZATION
+              valueFrom:
+                secretKeyRef:
+                  name: clima-service-nimbus
+                  key: NIMBUS_AUTHORIZATION
+            # Lido nativamente pela JVM; /tmp e um emptyDir (rootfs somente leitura)
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75.0 -Djava.io.tmpdir=/tmp"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          startupProbe:
+            httpGet:
+              path: /actuator/health
+              port: http
+            failureThreshold: 30
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

@@ -1,4 +1,4 @@
-name: Build and deploy Docker image to Azure Container Instances - Neovia-Painel-API
+name: Build and push clima-service
 
 on:
   push:
@@ -33,5 +33,5 @@ jobs:
         with:
           push: true
           tags: |
-            ${{ secrets.ACR_ENDPOINT }}/service-api:${{ steps.vars.outputs.sha_short }}
-            ${{ secrets.ACR_ENDPOINT }}/service-api:latest
+            ${{ secrets.ACR_ENDPOINT }}/clima-service:${{ steps.vars.outputs.sha_short }}
+            ${{ secrets.ACR_ENDPOINT }}/clima-service:latest

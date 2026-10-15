@@ -1,0 +1,73 @@
+# Segmentacao de rede apenas dos pods do clima-service (o namespace "default" e compartilhado).
+# 1) DENY ALL (ingress + egress)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: clima-service-deny-all
+  namespace: default
+  labels:
+    app: clima-service
+spec:
+  podSelector:
+    matchLabels:
+      app: clima-service
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# 2) INGRESS: somente pods do namespace default (pgo-api-service, neoviapainel-backend), porta 8080
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: clima-service-allow-ingress
+  namespace: default
+  labels:
+    app: clima-service
+spec:
+  podSelector:
+    matchLabels:
+      app: clima-service
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: default
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# 3) EGRESS: DNS, SQL Server (1433), HTTPS do Nimbus (443) e Redis (6379)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: clima-service-allow-egress
+  namespace: default
+  labels:
+    app: clima-service
+spec:
+  podSelector:
+    matchLabels:
+      app: clima-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: 1433
+    - ports:
+        - protocol: TCP
+          port: 443
+    - ports:
+        - protocol: TCP
+          port: 6379
