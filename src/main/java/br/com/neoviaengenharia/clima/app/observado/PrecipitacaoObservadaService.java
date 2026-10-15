@@ -31,9 +31,10 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionException;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
@@ -104,8 +105,11 @@ public class PrecipitacaoObservadaService {
         } catch (NimbusRegiaoRecusadaException e) {
             log.warn("Nimbus recusou a região {}; respondendo como região não encontrada", regionId);
             throw new RegiaoNaoEncontradaException();
-        } catch (PessimisticLockingFailureException e) {
-            log.warn("Trava do observado esgotada (regiao={}); servindo o gravado", regionId);
+        } catch (DataAccessException | TransactionException e) {
+            // DataAccessException inteira, como no CatalogoRegioesService: com o timeout da trava o pool pode
+            // descartar a conexão e o erro chegar como JpaSystemException. Serve o que foi lido antes da trava.
+            log.warn("Não foi possível obter a trava ou gravar o observado (regiao={}, erro={}); servindo o gravado",
+                    regionId, e.getClass().getSimpleName());
             busca = new Busca(false, estados, Map.of());
         }
 

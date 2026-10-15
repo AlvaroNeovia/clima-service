@@ -37,6 +37,7 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.ApplicationContext;
 import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.orm.jpa.JpaSystemException;
 
 @ExtendWith(OutputCaptureExtension.class)
 class PrecipitacaoObservadaServiceIT extends IntegracaoBase {
@@ -339,6 +340,18 @@ class PrecipitacaoObservadaServiceIT extends IntegracaoBase {
         assertThat(r.desatualizado()).isTrue();
         assertThat(r.horas()).hasSize(12);
         assertThat(novasRequisicoes()).isZero();
+    }
+
+    @Test
+    void lockEsgotadoComoJpaSystemExceptionServeGravado() {
+        // com o pool descartando a conexão após o timeout da trava, o erro chega trocado (ver CatalogoRegioesService)
+        fx.gravar(ATIVA, horas(h15("06:00"), 12), "1", h15("17:10"));
+        doThrow(new JpaSystemException(new RuntimeException("rollback"))).when(trava).travar(ATIVA);
+
+        ObservadoResultado r = service.consultar(ATIVA, janela(h15("06:00"), h15("19:00")));
+
+        assertThat(r.desatualizado()).isTrue();
+        assertThat(r.horas()).hasSize(12);
     }
 
     @Test
