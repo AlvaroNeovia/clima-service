@@ -42,4 +42,18 @@ class PrevisaoCacheRedisForaIT extends IntegracaoRedisForaBase {
 
         assertThat(saida.getAll()).contains("Falha no cache L2");
     }
+
+    @Test
+    void rodadaComRedisForaNaoLanca(CapturedOutput saida) {
+        Instant rodada = Instant.parse("2026-10-15T00:00:00Z");
+        RodadaPrevisao r = new RodadaPrevisao(1359, rodada, Instant.parse("2026-10-15T03:12:44Z"), List.of());
+
+        assertThatCode(() -> cache.guardarRodada(r)).doesNotThrowAnyException();
+        assertThat(cache.obterRodada(1359, rodada)).contains(r); // L1 segue funcionando
+        cache.limparL1();
+        assertThatCode(() -> cache.obterRodada(1359, rodada)).doesNotThrowAnyException();
+        assertThatCode(() -> cache.invalidarRodada(1359, rodada)).doesNotThrowAnyException();
+
+        assertThat(saida.getAll()).contains("Falha no cache L2");
+    }
 }
