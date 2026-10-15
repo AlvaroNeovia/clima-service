@@ -1,5 +1,6 @@
 package br.com.neoviaengenharia.clima.infra.nimbus;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -11,8 +12,8 @@ import org.springframework.web.client.RestClient;
 public class NimbusConfig {
 
     @Bean
-    public NimbusClient nimbusClient(NimbusProperties props) {
-        return new NimbusClient(criarRestClient(props));
+    public NimbusClient nimbusClient(NimbusProperties props, ObjectMapper mapper) {
+        return new NimbusClient(criarRestClient(props), mapper);
     }
 
     static RestClient criarRestClient(NimbusProperties props) {
