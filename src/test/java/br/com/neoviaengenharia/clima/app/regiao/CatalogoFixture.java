@@ -27,7 +27,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /** Preparação do estado (SQL, cache e Nimbus simulado) para os testes do catálogo. */
-class CatalogoFixture {
+public class CatalogoFixture {
 
     /** Valor padrão de {@code DEFAULT_LOCK_TIMEOUT} no H2 2.x (ms); o H2 não o expõe em INFORMATION_SCHEMA. */
     private static final int LOCK_TIMEOUT_PADRAO_DO_H2 = 1000;
@@ -41,7 +41,7 @@ class CatalogoFixture {
     private final HikariDataSource dataSource;
 
     @SuppressWarnings("unchecked")
-    CatalogoFixture(ApplicationContext ctx) {
+    public CatalogoFixture(ApplicationContext ctx) {
         this.regioes = ctx.getBean(RegiaoRepository.class);
         this.buscas = ctx.getBean(BuscaCatalogoRepository.class);
         this.controle = ctx.getBean(ControleCatalogoRepository.class);
@@ -136,7 +136,7 @@ class CatalogoFixture {
     }
 
     /** Esvazia tabelas, zera a última falha, limpa L1/L2 e descarta respostas enfileiradas no Nimbus. */
-    void limpar(MockWebServer nimbus) {
+    public void limpar(MockWebServer nimbus) {
         nimbus.setDispatcher(new QueueDispatcher());
         tx.executeWithoutResult(s -> {
             regioes.deleteAll();
@@ -170,7 +170,7 @@ class CatalogoFixture {
         });
     }
 
-    static RegiaoNimbus ativa(long id) {
+    public static RegiaoNimbus ativa(long id) {
         return new RegiaoNimbus(id, "Região " + id, "r" + id, false, 25L);
     }
 
@@ -178,7 +178,7 @@ class CatalogoFixture {
         return new RegiaoNimbus(id, "Região " + id, "r" + id, true, 25L);
     }
 
-    static MockResponse resposta(RegiaoNimbus... itens) {
+    public static MockResponse resposta(RegiaoNimbus... itens) {
         String corpo = Stream.of(itens)
                 .map(r -> String.format(
                         "{\"region_id\":%d,\"name\":\"%s\",\"alias\":\"%s\",\"inactive\":%s,\"state_id\":%d}",
