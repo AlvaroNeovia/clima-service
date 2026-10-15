@@ -1,11 +1,13 @@
 package br.com.neoviaengenharia.clima.infra.cache;
 
+import br.com.neoviaengenharia.clima.domain.previsao.PrevisaoVigente;
 import br.com.neoviaengenharia.clima.domain.regiao.CatalogoSnapshot;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Expiry;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -39,5 +41,34 @@ public class CacheConfig {
                     }
                 })
                 .build();
+    }
+
+    /** L1 da previsão vigente: uma entrada por região, que expira em {@code validoAte} da própria entrada. */
+    @Bean
+    Cache<Long, PrevisaoVigente> previsaoVigenteL1(Clock clock) {
+        return Caffeine.newBuilder()
+                .maximumSize(5000)
+                .expireAfter(new Expiry<Long, PrevisaoVigente>() {
+                    @Override
+                    public long expireAfterCreate(Long chave, PrevisaoVigente valor, long agora) {
+                        return restante(clock, valor.validoAte());
+                    }
+
+                    @Override
+                    public long expireAfterUpdate(Long chave, PrevisaoVigente valor, long agora, long duracao) {
+                        return restante(clock, valor.validoAte());
+                    }
+
+                    @Override
+                    public long expireAfterRead(Long chave, PrevisaoVigente valor, long agora, long duracao) {
+                        return duracao;
+                    }
+                })
+                .build();
+    }
+
+    private static long restante(Clock clock, Instant validoAte) {
+        Duration d = Duration.between(clock.instant(), validoAte);
+        return d.isNegative() ? 0 : d.toNanos();
     }
 }
